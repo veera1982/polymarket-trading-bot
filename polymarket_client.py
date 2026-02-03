@@ -243,17 +243,24 @@ class PolymarketClient:
     async def get_market_prices(self, market_id: str) -> List[Token]:
         """Get current prices and probabilities for a market"""
         try:
-            url = f"{self.base_url}/markets/{market_id}/tokens"
-            data = await self._make_request(url)
+            # Use the correct endpoint without /tokens suffix
+            url = f"{self.base_url}/markets/{market_id}"
+            market_data = await self._make_request(url)
             
             tokens = []
-            for token_data in data:
+            # Token information is nested within the market object
+            token_list = market_data.get('tokens', [])
+            if not token_list:
+                # Try alternative field name
+                token_list = market_data.get('clobTokenIds', [])
+            
+            for token_data in token_list:
                 token = Token(
-                    id=token_data['id'],
-                    outcome=token_data['outcome'],
-                    price=float(token_data['price']),
-                    probability=float(token_data['probability']),
-                    supply=float(token_data['supply'])
+                    id=token_data.get('id', ''),
+                    outcome=token_data.get('outcome', ''),
+                    price=float(token_data.get('price', 0)),
+                    probability=float(token_data.get('probability', 0)),
+                    supply=float(token_data.get('supply', 0))
                 )
                 tokens.append(token)
             

@@ -287,11 +287,17 @@ class ClobClient:
             List of Token objects with current prices
         """
         try:
-            endpoint = f"/markets/{market_id}/tokens"
-            data = await self._make_request(endpoint)
+            endpoint = f"/markets/{market_id}"
+            market_data = await self._make_request(endpoint)
             
             tokens = []
-            for token_data in data.get('tokens', []):
+            # Token information is nested within the market object
+            token_list = market_data.get('tokens', [])
+            if not token_list:
+                # Try alternative field name
+                token_list = market_data.get('clobTokenIds', [])
+            
+            for token_data in token_list:
                 token = Token(
                     id=token_data.get('id', ''),
                     outcome=token_data.get('outcome', ''),
