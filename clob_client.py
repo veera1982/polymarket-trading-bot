@@ -426,6 +426,26 @@ class ClobClient:
             logger.warning(f"Health check failed: {e}")
             return False
     
+    async def get_btc_15m_markets(self) -> List[Market]:
+        """
+        Get all active BTC 15-minute markets
+        
+        Returns:
+            List of BTC 15m Market objects
+        """
+        try:
+            all_markets = await self.get_all_15m_markets()
+            
+            # Filter for BTC markets only
+            btc_markets = [m for m in all_markets if m.asset_type.lower() == 'btc']
+            
+            logger.info(f"Found {len(btc_markets)} active BTC 15-minute markets")
+            return btc_markets
+            
+        except Exception as e:
+            logger.error(f"Failed to get BTC 15m markets: {e}")
+            return []
+    
     async def close(self):
         """Close the session"""
         if self.session:
