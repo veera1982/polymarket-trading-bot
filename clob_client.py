@@ -149,10 +149,13 @@ class ClobClient:
     
     async def get_all_15m_markets(self) -> List[Market]:
         """
-        Fetch all active 15-minute crypto markets from CLOB API
+        Fetch all active 15-minute crypto markets from Gamma API
         
-        This is the primary method for discovering 15-minute markets.
-        Returns markets for BTC, ETH, SOL, and XRP.
+        Uses the Gamma API directly as recommended by Gemini research.
+        The CLOB API's get_all_15m_markets() method is unreliable for Neg Risk markets.
+        
+        Gamma API Endpoint: https://gamma-api.polymarket.com/markets
+        Parameters: active=true, closed=false, query=15-minute
         
         Returns:
             List of Market objects for 15-minute crypto markets
@@ -163,40 +166,64 @@ class ClobClient:
                 logger.debug("Using cached 15m markets")
                 return list(self.market_cache.values())
             
-            logger.info("Fetching 15-minute markets from CLOB API...")
+            logger.info("Fetching 15-minute markets from Gamma API...")
             
-            # CLOB API endpoint for markets (try without versioning first)
-            endpoint = "/markets"
-            try:
-                data = await self._make_request(endpoint, use_versioning=False)
-            except:
-                # Fallback to versioned endpoint
-                data = await self._make_request(endpoint, use_versioning=True)
+            # Use Gamma API directly for 15-minute markets
+            gamma_url = "https://gamma-api.polymarket.com/markets"
+            params = {
+                'active': 'true',
+                'closed': 'false',
+                'query': '15-minute',
+                'limit': '20'  # Get up to 20 markets
+            }
+            
+            # Build URL with query parameters
+            query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+            full_url = f"{gamma_url}?{query_string}"
+            
+            await self._ensure_session()
+            
+            # Make direct request to Gamma API
+            async with self.session.get(full_url) as response:
+                if response.status != 200:
+                    logger.error(f"Gamma API returned status {response.status}")
+                    return []
+                
+                data = await response.json()
             
             if not data:
-                raise Exception("Could not fetch markets from CLOB API")
+                logger.warning("No data returned from Gamma API")
+                return []
             
             markets = []
             
-            # Filter for 15-minute markets
-            for market_data in data.get('markets', []):
+            # Parse markets from Gamma API response
+            for market_data in data:
                 try:
-                    # Check if this is a 15-minute market
-                    if self._is_15m_market(market_data):
-                        market = self._parse_market(market_data)
-                        markets.append(market)
-                        self.market_cache[market.id] = market
+                    # Verify it's a Neg Risk (15-minute) market
+                    if not market_data.get('negRisk', False):
+                        continue
+                    
+                    # Check if it's a crypto market (BTC, ETH, SOL, XRP)
+                    question = market_data.get('question', '')
+                    if not any(asset in question.upper() for asset in ['BTC', 'ETH', 'SOL', 'XRP']):
+                        continue
+                    
+                    market = self._parse_gamma_market(market_data)
+                    markets.append(market)
+                    self.market_cache[market.id] = market
+                    
                 except Exception as e:
                     logger.debug(f"Skipping market: {e}")
                     continue
             
             self.last_cache_update = time.time()
-            logger.info(f"Retrieved {len(markets)} active 15-minute markets")
+            logger.info(f"Retrieved {len(markets)} active 15-minute markets from Gamma API")
             return markets
             
         except Exception as e:
-            logger.error(f"Failed to fetch 15m markets: {e}")
-            raise
+            logger.error(f"Failed to fetch 15m markets from Gamma API: {e}")
+            return []  # Return empty list instead of raising to allow bot to continue
     
     def _is_15m_market(self, market_data: Dict) -> bool:
         """
@@ -242,6 +269,51 @@ class ClobClient:
             liquidity=float(market_data.get('liquidity', 0)),
             tokens=market_data.get('tokens', []),
             created_at=market_data.get('createdAt') or market_data.get('created_at') or '',
+            slug=market_data.get('slug', ''),
+            asset_type=asset_type,
+            market_type='15m'
+        )
+        return market
+    
+    def _parse_gamma_market(self, market_data: Dict) -> Market:
+        """Parse market data from Gamma API response
+        
+        Gamma API returns Neg Risk markets with clobTokenIds for trading.
+        These are 15-minute markets with UP/DOWN outcomes.
+        """
+        question = market_data.get('question', '')
+        
+        # Extract asset type from question
+        asset_type = 'unknown'
+        for asset in ['BTC', 'ETH', 'SOL', 'XRP']:
+            if asset in question.upper():
+                asset_type = asset.lower()
+                break
+        
+        # Extract clobTokenIds for trading
+        clob_token_ids = market_data.get('clobTokenIds', [])
+        
+        # Build tokens list from clobTokenIds
+        tokens = []
+        if clob_token_ids:
+            # Typically 2 tokens: UP and DOWN
+            for i, token_id in enumerate(clob_token_ids):
+                outcome = 'UP' if i == 0 else 'DOWN'
+                tokens.append({
+                    'token_id': token_id,
+                    'outcome': outcome
+                })
+        
+        market = Market(
+            id=market_data.get('id', ''),
+            question=question,
+            description=market_data.get('description', ''),
+            end_date=market_data.get('endDate', ''),
+            active=market_data.get('active', True),
+            volume=float(market_data.get('volume', 0)),
+            liquidity=float(market_data.get('liquidity', 0)),
+            tokens=tokens,
+            created_at=market_data.get('createdAt', ''),
             slug=market_data.get('slug', ''),
             asset_type=asset_type,
             market_type='15m'
